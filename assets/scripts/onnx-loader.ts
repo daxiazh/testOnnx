@@ -13,6 +13,9 @@ declare namespace WXWebAssembly {
     ): Promise<WebAssembly.WebAssemblyInstantiatedSource>;
 }
 
+// wasm文件名
+const wasmFileName = "wasm/PiecesRecommend-428";
+
 /**
  * 微信比较版本的函数, 见: https://developers.weixin.qq.com/minigame/dev/guide/runtime/client-lib/compatibility.html
  * @param v1 {string} 指定参与比较的版本号, 字符串
@@ -120,7 +123,29 @@ export default class WasmUtil {
 
         switch (currentPlatform) {
             case Platform.wx: {
-                // 微信平台, 只能通过微信支持的路径来加载 wasm
+				// 微信平台, 只能通过微信支持的路径来加载 wasm
+				ort.env.wasm.simd = false;
+				console.log("开始加载wasm");
+				ort.env.wasm.instantiateWasm = (imports, successCallback) => { 
+					WXWebAssembly
+						// 注意: 这里的路径是指微信中的路径, 不是 cocos creator 中的路径, 即微信根目录必须有这个目录与文件
+						.instantiate("wasm/ort-wasm-simd-threaded.wasm", imports)
+						.then((result) => {
+							console.log("加载wasm成功");
+							successCallback(result.instance);
+						})
+						.catch((reason) => {
+							console.error("加载wasm失败: ", reason);
+							this.mError = "1." + reason.toString();
+							throw new Error(this.mError);
+						});
+				};				
+				
+				
+				// 微信平台不支持 performance.timeOrigin, 但onnx 需要, 所以我们 hack 一下
+				if (performance.timeOrigin == undefined) {
+					(performance as any).timeOrigin = 0;
+				}
                 break;
             }
 
@@ -141,7 +166,7 @@ export default class WasmUtil {
 		// 加载 ort 模型文件
 		const ortModelData = await this.loadOrtAsset();
 
-		// 创建模型 session
+		// 创建模型 session. TODO: 加载失败的处理???
 		this.inferenceSession = await ort.InferenceSession.create(ortModelData);
 
 		// 创建对应的 Tensor, 这里必须与模型保持一致
@@ -161,9 +186,9 @@ export default class WasmUtil {
 			action_masks: this.actionMasksTensor
 		};
 
-		if (DEBUG) {
+		//if (DEBUG) {
 			console.log('[OnnxLoader] init success');
-		}
+		//}
 		return true;
     }
 
@@ -198,7 +223,10 @@ export default class WasmUtil {
 		this.actionMasksTensor.data.set(actionMasksData);
 
 		// 开始推理
+		const startTime = performance.now();
 		const results = await this.inferenceSession.run(this.inputFeed);
+		const duration = performance.now() - startTime;
+		console.log(`推理耗时: ${duration} ms`);
 		const discreteActionsOutput = results['discrete_actions'];
 		return discreteActionsOutput.data[0];
 	}
@@ -258,7 +286,7 @@ export default class WasmUtil {
         return new Promise<Uint8Array | null>((resolve, reject) => {
 			assetManager.loadAny(
 				{
-					path: "wasm/PiecesRecommend-428",
+					path: wasmFileName,
 					bundle: "resources",
 				},  
                 (err, asset) => {
