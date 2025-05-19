@@ -1,4 +1,4 @@
-import { assetManager, BufferAsset } from "cc";
+import { AssetManager, assetManager } from "cc";
 import * as ort from "./ort.wasm.bundle.mjs";
 import PlatformUtils, { Platform } from "./platform-utils";
 import { DEBUG } from "cc/env";
@@ -14,7 +14,7 @@ declare namespace WXWebAssembly {
 }
 
 // wasm文件名
-const wasmFileName = "wasm/PiecesRecommend-428";
+const wasmFileName = "PiecesRecommend-428";
 
 /**
  * 微信比较版本的函数, 见: https://developers.weixin.qq.com/minigame/dev/guide/runtime/client-lib/compatibility.html
@@ -55,30 +55,35 @@ declare const wx: any;
  * Wasm 的辅助类
  */
 export default class WasmUtil {
-	public static readonly Instance: WasmUtil = new WasmUtil();
-	
-	/**
-	 * 推理模型会话
-	 */
-	private inferenceSession: any = null;
+    public static readonly Instance: WasmUtil = new WasmUtil();
 
-	/**
-	 * 观察数据的 Tensor
-	 */
-	private obs0Tensor: any = null;
+    /**
+     * 推理模型会话
+     */
+    private inferenceSession: any = null;
 
-	/**
-	 * 动作掩码 Tensor
-	 */
-	private actionMasksTensor: any = null;
+    /**
+     * 观察数据的 Tensor
+     */
+    private obs0Tensor: any = null;
 
-	/**
-	 * 模型的输入数据
-	 */
-	private inputFeed: {obs_0: any; action_masks: any;}
+    /**
+     * 动作掩码 Tensor
+     */
+    private actionMasksTensor: any = null;
+
+    /**
+     * 模型的输入数据
+     */
+    private inputFeed: { obs_0: any; action_masks: any };
 
     // 当前的错误
     private mError: string = "";
+
+    /**
+     * 记录释放 wasm 资源的函数
+     */
+    private releaseWasmFunction: () => void = null;
 
     public get Err(): string {
         return this.mError;
@@ -121,38 +126,39 @@ export default class WasmUtil {
             ort.env.trace = true;
         }
 
+        const bundle = await this.loadSubpackage();
+
         switch (currentPlatform) {
             case Platform.wx: {
-				// 微信平台, 只能通过微信支持的路径来加载 wasm
-				ort.env.wasm.simd = false;
-				console.log("开始加载wasm");
-				ort.env.wasm.instantiateWasm = (imports, successCallback) => { 
-					WXWebAssembly
-						// 注意: 这里的路径是指微信中的路径, 不是 cocos creator 中的路径, 即微信根目录必须有这个目录与文件
-						.instantiate("wasm/ort-wasm-simd-threaded.wasm", imports)
-						.then((result) => {
-							console.log("加载wasm成功");
-							successCallback(result.instance);
-						})
-						.catch((reason) => {
-							console.error("加载wasm失败: ", reason);
-							this.mError = "1." + reason.toString();
-							throw new Error(this.mError);
-						});
-				};				
-				
-				
-				// 微信平台不支持 performance.timeOrigin, 但onnx 需要, 所以我们 hack 一下
-				if (performance.timeOrigin == undefined) {
-					(performance as any).timeOrigin = 0;
-				}
+                // 微信平台, 只能通过微信支持的路径来加载 wasm
+                ort.env.wasm.simd = false;
+                console.log("开始加载wasm");
+                ort.env.wasm.instantiateWasm = (imports, successCallback) => {
+                    WXWebAssembly
+                        // 注意: 这里的路径是指微信中的路径, 不是 cocos creator 中的路径, 即微信根目录必须有这个目录与文件
+                        .instantiate("wasm/ort-wasm.wasm", imports)
+                        .then((result) => {
+                            console.log("加载wasm成功");
+                            successCallback(result.instance);
+                        })
+                        .catch((reason) => {
+                            console.error("加载wasm失败: ", reason);
+                            this.mError = "1." + reason.toString();
+                            throw new Error(this.mError);
+                        });
+                };
+
+                // 微信平台不支持 performance.timeOrigin, 但onnx 需要, 所以我们 hack 一下
+                if (performance.timeOrigin == undefined) {
+                    (performance as any).timeOrigin = 0;
+                }
                 break;
             }
 
             case Platform.web: {
                 // web 平台
                 // 加载 wasm 文件
-                await this.loadWasmAsset();
+                await this.loadWasmAsset(bundle);
                 break;
             }
             default: {
@@ -163,33 +169,46 @@ export default class WasmUtil {
             }
         }
 
-		// 加载 ort 模型文件
-		const ortModelData = await this.loadOrtAsset();
+        // 加载 ort 模型文件
+        const ortModelData = await this.loadOrtAsset(bundle);
 
-		// 创建模型 session. TODO: 加载失败的处理???
-		this.inferenceSession = await ort.InferenceSession.create(ortModelData);
+        // 释放 wasm 资源
+        if (this.releaseWasmFunction) {
+            this.releaseWasmFunction();
+            this.releaseWasmFunction = null;
+        }
 
-		// 创建对应的 Tensor, 这里必须与模型保持一致
-		const obs0Shape = [1, 139];
-		const actionMasksShape = [1, 1767];
+        // 创建模型 session. TODO: 加载失败的处理???
+        this.inferenceSession = await ort.InferenceSession.create(ortModelData);
 
-		// 数据数量必须与形状的乘积匹配
-		const sampleObsData = new Float32Array(1 * 139); // 示例随机数据
-		const sampleActionMasksData = new Float32Array(1 * 1767); // 示例随机数据 (0或1)
+        // 创建对应的 Tensor, 这里必须与模型保持一致
+        const obs0Shape = [1, 139];
+        const actionMasksShape = [1, 1767];
 
-		this.obs0Tensor = new ort.Tensor('float32', sampleObsData, obs0Shape);
-		this.actionMasksTensor = new ort.Tensor('float32', sampleActionMasksData, actionMasksShape);
+        // 数据数量必须与形状的乘积匹配
+        const sampleObsData = new Float32Array(1 * 139); // 示例随机数据
+        const sampleActionMasksData = new Float32Array(1 * 1767); // 示例随机数据 (0或1)
 
-		// 推理的输入数据
-		this.inputFeed = {
-			obs_0: this.obs0Tensor,
-			action_masks: this.actionMasksTensor
-		};
+        this.obs0Tensor = new ort.Tensor("float32", sampleObsData, obs0Shape);
+        this.actionMasksTensor = new ort.Tensor(
+            "float32",
+            sampleActionMasksData,
+            actionMasksShape
+        );
 
-		//if (DEBUG) {
-			console.log('[OnnxLoader] init success');
-		//}
-		return true;
+        // 推理的输入数据
+        this.inputFeed = {
+            obs_0: this.obs0Tensor,
+            action_masks: this.actionMasksTensor,
+        };
+
+        // 释放资源包
+        assetManager.removeBundle(bundle);
+
+        //if (DEBUG) {
+        console.log("[OnnxLoader] init success");
+        //}
+        return true;
     }
 
     /**
@@ -201,75 +220,83 @@ export default class WasmUtil {
             return false;
         }
         return true;
-	}
+    }
 
-	/**
-	 * 由传入的观察数据与 action mask 数据来进行模型推理, 推理下一个砖块索引
-	 * @param obsData 观察数据
-	 * @param actionMasksData action mask 数据
-	 */
-	public async recommendPiece(obsData: Float32Array, actionMasksData: Float32Array): Promise<number> {
-		// 检查长度是否匹配
-		if (obsData.length !== this.obs0Tensor.data.length) {
-			throw new Error(`推理时, 传入的 obs 数据长度不匹配！期望 ${this.obs0Tensor.data.length}，实际 ${obsData.length}`);
-		}
+    /**
+     * 由传入的观察数据与 action mask 数据来进行模型推理, 推理下一个砖块索引
+     * @param obsData 观察数据
+     * @param actionMasksData action mask 数据
+     */
+    public async recommendPiece(
+        obsData: Float32Array,
+        actionMasksData: Float32Array
+    ): Promise<number> {
+        // 检查长度是否匹配
+        if (obsData.length !== this.obs0Tensor.data.length) {
+            throw new Error(
+                `推理时, 传入的 obs 数据长度不匹配！期望 ${this.obs0Tensor.data.length}，实际 ${obsData.length}`
+            );
+        }
 
-		if (actionMasksData.length !== this.actionMasksTensor.data.length) {
-			throw new Error(`推理时, 传入的 action mask 数据长度不匹配！期望 ${this.actionMasksTensor.data.length}，实际 ${actionMasksData.length}`);
-		}
+        if (actionMasksData.length !== this.actionMasksTensor.data.length) {
+            throw new Error(
+                `推理时, 传入的 action mask 数据长度不匹配！期望 ${this.actionMasksTensor.data.length}，实际 ${actionMasksData.length}`
+            );
+        }
 
-		// 更新 Tensor 数据
-		this.obs0Tensor.data.set(obsData);
-		this.actionMasksTensor.data.set(actionMasksData);
+        // 更新 Tensor 数据
+        this.obs0Tensor.data.set(obsData);
+        this.actionMasksTensor.data.set(actionMasksData);
 
-		// 开始推理
-		const startTime = performance.now();
-		const results = await this.inferenceSession.run(this.inputFeed);
-		const duration = performance.now() - startTime;
-		console.log(`推理耗时: ${duration} ms`);
-		const discreteActionsOutput = results['discrete_actions'];
-		return discreteActionsOutput.data[0];
-	}
+        // 开始推理
+        const startTime = performance.now();
+        const results = await this.inferenceSession.run(this.inputFeed);
+        const duration = performance.now() - startTime;
+        console.log(`推理耗时: ${duration} ms`);
+        const discreteActionsOutput = results["discrete_actions"];
+        return discreteActionsOutput.data[0];
+    }
 
-	/**
-	 * 释放 Wasm
-	 */
-	public async release() {
-		await this.inferenceSession?.release();
-		this.inferenceSession = null;
-	}
+    /**
+     * 释放 Wasm
+     */
+    public async release() {
+        await this.inferenceSession?.release();
+        this.inferenceSession = null;
+    }
 
     /**
      * 加载 Wasm 资源
      * @returns 是否加载成功
      */
-    private async loadWasmAsset(): Promise<boolean> {
+    private async loadWasmAsset(bundle: AssetManager.Bundle): Promise<boolean> {
         // 注册 wasm 文件的加载器
         this.registerWasmFileLoader();
 
         try {
             const asset: { url: string; wasm: ArrayBuffer } = await new Promise(
                 (resolve, reject) => {
-                    assetManager.loadAny(
-                        {
-                            path: "wasm/ort-wasm-simd-threaded",
-                            bundle: "resources",
-                            ext: ".wasm",
-                            __isNative__: true,
-                        },
-                        {},
-                        (err, asset: { url: string; wasm: ArrayBuffer }) => {
-                            if (err) {
-                                reject(err);
-                            } else {
-                                resolve(asset);
-                            }
+                    bundle.load("ort-wasm-simd-threaded", (err, asset) => {
+                        if (err) {
+                            console.error(
+                                "加载 onnxRuntime WASM 模块失败: ",
+                                err
+                            );
+                            reject(err);
+                        } else {
+                            console.log("加载 onnxRuntime WASM 模块成功");
+                            resolve(asset.nativeAsset);
+
+                            // 注释释放 Wasm 函数
+                            this.releaseWasmFunction = () => {
+                                // assetManager.releaseAsset(asset);
+                            };
                         }
-                    );
+                    });
                 }
             );
 
-            // 设置 ort 相关参数, 让 onnxruntime-web 可以正常加载
+            // 设置 ort 相关参数, 让 onnxruntime-web 可以正常加载 wasm
             ort.env.wasm.wasmBinary = asset.wasm;
             return true;
         } catch (err: any) {
@@ -278,25 +305,38 @@ export default class WasmUtil {
         }
     }
 
-	/**
-	 * 加载 Ort 模型文件
-	 * @returns 
-	 */
-    private loadOrtAsset(): Promise<Uint8Array | null> {
-        return new Promise<Uint8Array | null>((resolve, reject) => {
-			assetManager.loadAny(
-				{
-					path: wasmFileName,
-					bundle: "resources",
-				},  
-                (err, asset) => {
-                    if (err) {
-                        reject(err);
-                    } else {
-                        resolve(new Uint8Array(asset.buffer()));
-                    }
+    /**
+     * 加载 Wasm 所在的子包, 因为 wasm 一般比较大, 所以我们需要把它们放在子包中
+     * @returns
+     */
+    private loadSubpackage(): Promise<AssetManager.Bundle> {
+        return new Promise<AssetManager.Bundle>((resolve, reject) => {
+            assetManager.loadBundle("onnx_runtime", (err, bundle) => {
+                if (err) {
+                    console.error("加载 onnxRuntime Bundle 失败: ", err);
+                    reject(err);
+                    return;
+                } else {
+                    resolve(bundle);
                 }
-            );
+            });
+        });
+    }
+
+    /**
+     * 加载 Ort 模型文件
+     * @returns
+     */
+    private loadOrtAsset(bundle: AssetManager.Bundle): Promise<Uint8Array | null> {
+        return new Promise<Uint8Array | null>((resolve, reject) => {
+            bundle.load(wasmFileName, (err, asset) => {
+                if(err) {
+                    reject(err);
+                    return;
+                } else {
+                    resolve(new Uint8Array((asset as any).buffer()));
+                }
+            });
         });
     }
 
@@ -317,7 +357,7 @@ export default class WasmUtil {
         );
 
         assetManager.parser.register(".wasm", (file, options, onComplete) => {
-            console.log(file);
+            // console.log(file);
             onComplete(undefined, file);
         });
     }
