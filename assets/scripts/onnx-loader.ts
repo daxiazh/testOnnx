@@ -14,7 +14,13 @@ declare namespace WXWebAssembly {
 }
 
 // wasm文件名
-const wasmFileName = "PiecesRecommend-428";
+const onnxFileName = "PiecesRecommend-428";
+
+// wasm所在子包名
+const subpackageName = "onnx_runtime";
+
+// wasm文件名
+const wasmName = "ort-wasm-simd-threaded";
 
 /**
  * 微信比较版本的函数, 见: https://developers.weixin.qq.com/minigame/dev/guide/runtime/client-lib/compatibility.html
@@ -126,17 +132,24 @@ export default class WasmUtil {
             ort.env.trace = true;
         }
 
+        // 先加载子包, 因为我们的资源都在子包中
         const bundle = await this.loadSubpackage();
+        
+        // 加载 wasm 文件, 注意: 在小游戏平台, 因为子包原因, 我们实际上加载不到 wasm 文件内容, 只能使用它的路径
+        const wasmAssetInfo = await this.loadWasmAsset(bundle);
+
+        const wasmPath = bundle.getInfoWithPath(wasmName);
 
         switch (currentPlatform) {
             case Platform.wx: {
                 // 微信平台, 只能通过微信支持的路径来加载 wasm
                 ort.env.wasm.simd = false;
-                console.log("开始加载wasm");
-                ort.env.wasm.instantiateWasm = (imports, successCallback) => {
+
+                console.log("开始实例化 wasm");
+                ort.env.wasm.instantiateWasm = (imports, successCallback) => {                    
                     WXWebAssembly
-                        // 注意: 这里的路径是指微信中的路径, 不是 cocos creator 中的路径, 即微信根目录必须有这个目录与文件
-                        .instantiate("wasm/ort-wasm.wasm", imports)
+                        // 注意: 这里的路径是指微信中的路径, 不是 cocos creator 中的路径, 即打包后的路径
+                        .instantiate(wasmAssetInfo.url, imports)
                         .then((result) => {
                             console.log("加载wasm成功");
                             successCallback(result.instance);
@@ -157,13 +170,14 @@ export default class WasmUtil {
 
             case Platform.web: {
                 // web 平台
-                // 加载 wasm 文件
-                await this.loadWasmAsset(bundle);
+                // 设置 ort 相关参数, 让 onnxruntime-web 可以正常加载 wasm
+                ort.env.wasm.wasmBinary = wasmAssetInfo.wasm;
                 break;
             }
             default: {
                 // 其他平台, 不支持 Wasm, 只能使用服务器处理砖块的推荐
                 // TODO: 设置连接服务器的函数?? 连接服务器???
+                console.error("当前平台不支持 Wasm, 只能使用服务器处理砖块的推荐, 目前还没有实现这个功能");
 
                 return true;
             }
@@ -269,40 +283,30 @@ export default class WasmUtil {
      * 加载 Wasm 资源
      * @returns 是否加载成功
      */
-    private async loadWasmAsset(bundle: AssetManager.Bundle): Promise<boolean> {
+    private async loadWasmAsset(bundle: AssetManager.Bundle): Promise<{ url: string; wasm: ArrayBuffer }> {
         // 注册 wasm 文件的加载器
         this.registerWasmFileLoader();
+        return await new Promise(
+            (resolve, reject) => {
+                bundle.load(wasmName, (err, asset) => {
+                    if (err) {
+                        console.error(
+                            "加载 onnxRuntime WASM 模块失败: ",
+                            err
+                        );
+                        reject(err);
+                    } else {
+                        console.log("加载 onnxRuntime WASM 模块成功");
+                        resolve(asset.nativeAsset);
 
-        try {
-            const asset: { url: string; wasm: ArrayBuffer } = await new Promise(
-                (resolve, reject) => {
-                    bundle.load("ort-wasm-simd-threaded", (err, asset) => {
-                        if (err) {
-                            console.error(
-                                "加载 onnxRuntime WASM 模块失败: ",
-                                err
-                            );
-                            reject(err);
-                        } else {
-                            console.log("加载 onnxRuntime WASM 模块成功");
-                            resolve(asset.nativeAsset);
-
-                            // 注释释放 Wasm 函数
-                            this.releaseWasmFunction = () => {
-                                // assetManager.releaseAsset(asset);
-                            };
-                        }
-                    });
-                }
-            );
-
-            // 设置 ort 相关参数, 让 onnxruntime-web 可以正常加载 wasm
-            ort.env.wasm.wasmBinary = asset.wasm;
-            return true;
-        } catch (err: any) {
-            this.mError = "2." + err.message;
-            return false;
-        }
+                        // 注释释放 Wasm 函数
+                        this.releaseWasmFunction = () => {
+                            assetManager.releaseAsset(asset);
+                        };
+                    }
+                });
+            }
+        );
     }
 
     /**
@@ -311,7 +315,7 @@ export default class WasmUtil {
      */
     private loadSubpackage(): Promise<AssetManager.Bundle> {
         return new Promise<AssetManager.Bundle>((resolve, reject) => {
-            assetManager.loadBundle("onnx_runtime", (err, bundle) => {
+            assetManager.loadBundle(subpackageName, (err, bundle) => {
                 if (err) {
                     console.error("加载 onnxRuntime Bundle 失败: ", err);
                     reject(err);
@@ -329,8 +333,8 @@ export default class WasmUtil {
      */
     private loadOrtAsset(bundle: AssetManager.Bundle): Promise<Uint8Array | null> {
         return new Promise<Uint8Array | null>((resolve, reject) => {
-            bundle.load(wasmFileName, (err, asset) => {
-                if(err) {
+            bundle.load(onnxFileName, (err, asset) => {
+                if (err) {
                     reject(err);
                     return;
                 } else {
