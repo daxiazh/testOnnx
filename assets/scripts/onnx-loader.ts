@@ -14,7 +14,8 @@ declare namespace WXWebAssembly {
 }
 
 // wasm文件名
-const onnxFileName = "PiecesRecommend-428";
+// const onnxFileName = "PiecesRecommend-428-lr_3e-3_kayer3_hu_16_bs1024";
+const onnxFileName = "PiecesRecommend-429";
 
 // wasm所在子包名
 const subpackageName = "onnx_runtime";
