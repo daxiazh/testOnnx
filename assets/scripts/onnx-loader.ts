@@ -127,7 +127,7 @@ export default class WasmUtil {
     private async initWasm() {
         const currentPlatform = PlatformUtils.getPlatform();
 
-        if (DEBUG) {
+        if (false && DEBUG) {
             ort.env.logLevel = "verbose";
             ort.env.debug = true;
             ort.env.trace = true;
@@ -267,7 +267,7 @@ export default class WasmUtil {
         const startTime = performance.now();
         const results = await this.inferenceSession.run(this.inputFeed);
         const duration = performance.now() - startTime;
-        console.log(`推理耗时: ${duration} ms`);
+        // console.log(`推理耗时: ${duration} ms`);
         const discreteActionsOutput = results["discrete_actions"];
         return discreteActionsOutput.data[0];
     }
