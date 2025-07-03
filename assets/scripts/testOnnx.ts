@@ -31,9 +31,21 @@ export class testOnnx extends Component {
         const sampleObsData = this.sampleObsData;
         const sampleActionMasksData = this.sampleActionMasksData;
 
-        WasmUtil.Instance.recommendPiece(sampleObsData, sampleActionMasksData).then((recommendPiece) => {
-            console.log(`${this.tickCount++}. recommendPiece: ${recommendPiece}`);
-        })
+        const test = async () => {
+            // 保存统计输出的砖块的数量
+            const brickCount = new Map<number, number>(); 
+            const maxCount = 1000;
+            for (let i = 0; i < maxCount; i++) {
+                const recommendPiece = await WasmUtil.Instance.recommendPiece(sampleObsData, sampleActionMasksData);
+                brickCount.set(recommendPiece, (brickCount.get(recommendPiece) || 0) + 1);
+            }
+            
+            // 在一行中打印统计结果, 按降序排序
+            console.log([...brickCount.entries()].sort((a, b) => b[1] - a[1]).map(([key, value]) => `ID:${key}, brickCount:${value}, percent:${(value / maxCount).toFixed(2)}`));
+        }
+
+        test();
+        
     }
 }
 
