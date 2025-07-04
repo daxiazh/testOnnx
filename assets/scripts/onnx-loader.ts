@@ -14,8 +14,8 @@ declare namespace WXWebAssembly {
 }
 
 // wasm文件名
-// const onnxFileName = "PiecesRecommend-428-lr_3e-3_kayer3_hu_16_bs1024";
-const onnxFileName = "PiecesRecommend-429";
+const onnxFileName = "PiecesRecommend-428-lr_3e-3_kayer3_hu_16_bs1024";
+// const onnxFileName = "PiecesRecommend-429";
 
 // wasm所在子包名
 const subpackageName = "onnx_runtime";
@@ -132,6 +132,8 @@ export default class WasmUtil {
             ort.env.debug = true;
             ort.env.trace = true;
         }
+
+        console.log("使用的 Model: ", onnxFileName);
 
         // 先加载子包, 因为我们的资源都在子包中
         const bundle = await this.loadSubpackage();
