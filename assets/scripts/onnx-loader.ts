@@ -1,5 +1,6 @@
 import { AssetManager, assetManager } from "cc";
-import * as ort from "./ort.wasm.bundle.mjs";
+// import * as ort from "./ort.wasm.bundle.mjs";
+import * as ort from "./ort.wasm-core.mjs";
 import PlatformUtils, { Platform } from "./platform-utils";
 import { DEBUG } from "cc/env";
 
@@ -21,7 +22,7 @@ const onnxFileName = "PiecesRecommend-428-lr_3e-3_kayer3_hu_16_bs1024";
 const subpackageName = "onnx_runtime";
 
 // wasm文件名
-const wasmName = "ort-wasm-simd-threaded";
+const wasmName = "ort-wasm";
 
 /**
  * 微信比较版本的函数, 见: https://developers.weixin.qq.com/minigame/dev/guide/runtime/client-lib/compatibility.html
@@ -143,10 +144,16 @@ export default class WasmUtil {
 
         const wasmPath = bundle.getInfoWithPath(wasmName);
 
+        ort.env.wasm.simd = false;
+        ort.env.wasm.numThreads = 1;
+
+        // hack: 用于当上层的 Wasm 加载失败时, 通知底层 Wasm 加载失败
+        const readyPromiseRejectWrapper = { value: (e) => { } };
+        ort.env.wasm.readyPromiseReject = readyPromiseRejectWrapper;
+
         switch (currentPlatform) {
             case Platform.wx: {
                 // 微信平台, 只能通过微信支持的路径来加载 wasm
-                ort.env.wasm.simd = false;
 
                 console.log("开始实例化 wasm");
                 ort.env.wasm.instantiateWasm = (imports, successCallback) => {                    
@@ -174,7 +181,16 @@ export default class WasmUtil {
             case Platform.web: {
                 // web 平台
                 // 设置 ort 相关参数, 让 onnxruntime-web 可以正常加载 wasm
-                ort.env.wasm.wasmBinary = wasmAssetInfo.wasm;
+                wasmAssetInfo.wasm;            
+                ort.env.wasm.instantiateWasm = (imports, successCallback) => {
+                    WebAssembly.instantiate(wasmAssetInfo.wasm, imports)
+                        .then((result) => {
+                            successCallback(result["instance"]);
+                        })
+                        .catch((reason) => {
+                            readyPromiseRejectWrapper.value(reason);
+                        });
+                }
                 break;
             }
             default: {
