@@ -167,7 +167,7 @@ export default class WasmUtil {
                         .catch((reason) => {
                             console.error("加载wasm失败: ", reason);
                             this.mError = "1." + reason.toString();
-                            throw new Error(this.mError);
+                            readyPromiseRejectWrapper.value(reason);
                         });
                 };
 
@@ -181,7 +181,6 @@ export default class WasmUtil {
             case Platform.web: {
                 // web 平台
                 // 设置 ort 相关参数, 让 onnxruntime-web 可以正常加载 wasm
-                wasmAssetInfo.wasm;            
                 ort.env.wasm.instantiateWasm = (imports, successCallback) => {
                     WebAssembly.instantiate(wasmAssetInfo.wasm, imports)
                         .then((result) => {
