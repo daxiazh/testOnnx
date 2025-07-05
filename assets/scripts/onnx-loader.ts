@@ -149,7 +149,7 @@ export default class WasmUtil {
 
         // hack: 用于当上层的 Wasm 加载失败时, 通知底层 Wasm 加载失败
         const readyPromiseRejectWrapper = { value: (e) => { } };
-        ort.env.wasm.readyPromiseReject = readyPromiseRejectWrapper;
+        ort.env.wasm.readyPromiseRejectWrapper = readyPromiseRejectWrapper;
 
         switch (currentPlatform) {
             case Platform.wx: {
